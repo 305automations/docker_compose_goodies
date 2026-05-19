@@ -1,3 +1,5 @@
+name: twenty
+
 services:
   # ---------------------------------------------------------------------------
   # TWENTY CRM SERVER
@@ -8,7 +10,7 @@ services:
     volumes:
       - twenty-server-data:/app/packages/twenty-server/.local-storage
     ports:
-      - "3000:3000" # Exposes front-facing API / UI endpoint
+      - "3000:3000"
     environment:
       # --- Networking & Core URLs ---
       NODE_PORT: 3000 # Primary port the NodeJS runtime binds to
@@ -16,8 +18,8 @@ services:
 
       # --- Database & Cache Routing ---
       # Assembles connection URI using individual fallbacks; references 'db' host within internal network
-      PG_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@${PG_DATABASE_HOST:-db}:${PG_DATABASE_PORT:-5432}/${PG_DATABASE_NAME:-default}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379} # Internal Redis connection string
+      PG_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@${PG_DATABASE_HOST:-twenty-db}:${PG_DATABASE_PORT:-5432}/${PG_DATABASE_NAME:-default}
+      REDIS_URL: ${REDIS_URL:-redis://twenty-redis:6379} # Internal Redis connection string
 
       # --- App Lifecycle & Control Flag Switches ---
       DISABLE_DB_MIGRATIONS: ${DISABLE_DB_MIGRATIONS:-false} # Keeps migrations enabled on main server loop to update schemas
@@ -77,26 +79,23 @@ services:
       - twenty-network
 
   # ---------------------------------------------------------------------------
-  # BACKGROUND WORKERS (v2) - Scaled to 20 Instances
+  # BACKGROUND WORKERS
   # ---------------------------------------------------------------------------
   worker:
-    image: twentycrm/twenty:v2 # Matches production v2 engine layout explicitly
+    image: twentycrm/twenty:v2
     volumes:
-      - server-local-data:/app/packages/twenty-server/.local-storage
-    command: ["yarn", "worker:prod"] # Target background worker environment production command
+      - twenty-server-data:/app/packages/twenty-server/.local-storage
+    command: ["yarn", "worker:prod"]
     deploy:
-      replicas: 20 # Allocates 20 parallel worker container environments to clear queues quickly
+      replicas: 20
     environment:
-      # --- Connection Configurations ---
-      PG_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@${PG_DATABASE_HOST:-db}:${PG_DATABASE_PORT:-5432}/${PG_DATABASE_NAME:-default}
+      PG_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@${PG_DATABASE_HOST:-twenty-db}:${PG_DATABASE_PORT:-5432}/${PG_DATABASE_NAME:-default}
       SERVER_URL: ${SERVER_URL}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_URL: ${REDIS_URL:-redis://twenty-redis:6379}
 
-      # --- Scaling Logic Overrides ---
       DISABLE_DB_MIGRATIONS: "true" # Scaled workers must never try concurrent database migration updates
       DISABLE_CRON_JOBS_REGISTRATION: "true" # Locks out cron registrations so they run cleanly on server node only
 
-      # --- Storage Drivers & Cryptography (Mirroring Server Config) ---
       STORAGE_TYPE: ${STORAGE_TYPE}
       STORAGE_S3_REGION: ${STORAGE_S3_REGION}
       STORAGE_S3_NAME: ${STORAGE_S3_NAME}
@@ -104,86 +103,72 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       FALLBACK_ENCRYPTION_KEY: ${FALLBACK_ENCRYPTION_KEY}
       APP_SECRET: ${APP_SECRET}
-
-      # --- Worker Third-party Integration Mirrors (Optional) ---
-      # MESSAGING_PROVIDER_GMAIL_ENABLED: ${MESSAGING_PROVIDER_GMAIL_ENABLED}
-      # CALENDAR_PROVIDER_GOOGLE_ENABLED: ${CALENDAR_PROVIDER_GOOGLE_ENABLED}
-      # AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID}
-      # AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET}
-      # AUTH_GOOGLE_CALLBACK_URL: ${AUTH_GOOGLE_CALLBACK_URL}
-      # AUTH_GOOGLE_APIS_CALLBACK_URL: ${AUTH_GOOGLE_APIS_CALLBACK_URL}
-      # CALENDAR_PROVIDER_MICROSOFT_ENABLED: ${CALENDAR_PROVIDER_MICROSOFT_ENABLED}
-      # MESSAGING_PROVIDER_MICROSOFT_ENABLED: ${MESSAGING_PROVIDER_MICROSOFT_ENABLED}
-      # AUTH_MICROSOFT_ENABLED: ${AUTH_MICROSOFT_ENABLED}
-      # AUTH_MICROSOFT_CLIENT_ID: ${AUTH_MICROSOFT_CLIENT_ID}
-      # AUTH_MICROSOFT_CLIENT_SECRET: ${AUTH_MICROSOFT_CLIENT_SECRET}
-      # AUTH_MICROSOFT_CALLBACK_URL: ${AUTH_MICROSOFT_CALLBACK_URL}
-      # AUTH_MICROSOFT_APIS_CALLBACK_URL: ${AUTH_MICROSOFT_APIS_CALLBACK_URL}
-      # EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-contact@yourdomain.com}
-      # EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-"John from YourDomain"}
-      # EMAIL_DRIVER: ${EMAIL_DRIVER:-smtp}
-      # EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-smtp.gmail.com}
-      # EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-465}
-      # EMAIL_SMTP_USER: ${EMAIL_SMTP_USER:-}
-      # EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
-
     depends_on:
-      db:
+      twenty-db:
         condition: service_healthy
       server:
-        condition: service_healthy # Workers require the initialized database schema provided by a healthy server
-    restart: always
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - twenty_network
+      - twenty-network
 
   # ---------------------------------------------------------------------------
-  # DATABASE BACKEND (PostgreSQL Alpine)
+  # DATABASE BACKEND
   # ---------------------------------------------------------------------------
-  db:
-    image: postgres:16-alpine # Switched to lightweight Alpine variant
-    container_name: twenty_db
+  twenty-db:
+    image: postgres:16-alpine
+    container_name: twenty-db
     volumes:
-      - db-data:/var/lib/postgresql/data
+      - twenty-db-data:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: ${PG_DATABASE_NAME:-default} # Initializes target database schema namespace
       POSTGRES_PASSWORD: ${PG_DATABASE_PASSWORD:-postgres} # Production passphrase for user authentication
       POSTGRES_USER: ${PG_DATABASE_USER:-postgres} # Master database administrator login credential
     healthcheck:
-      # Swapped syntax: Alpine base images lack standard shell utilities, referencing generic pg_isready instead
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-default}"]
       interval: 5s
       timeout: 5s
       retries: 10
-    restart: always
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - twenty_network
+      - twenty-network
 
   # ---------------------------------------------------------------------------
-  # CACHE & BROKER BACKEND (Redis Alpine)
+  # CACHE & BROKER BACKEND
   # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine # Switched to lightweight Alpine variant
-    container_name: twenty_redis
-    restart: always
-    command: ["--maxmemory-policy", "noeviction", "--appendonly", "yes"] # Enforces data logging consistency via AOF
+  twenty-redis:
+    image: redis:7-alpine
+    container_name: twenty-redis
+    command: ["--maxmemory-policy", "noeviction", "--appendonly", "yes"]
     volumes:
-      - server-local-data:/data # Mount point mapped to persist broker transactions across service rebuilds
+      - twenty-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - twenty_network
+      - twenty-network
 
-# Global storage declarations for production data persistence
+# ---------------------------------------------------------------------------
+# GLOBAL INFRASTRUCTURE
+# ---------------------------------------------------------------------------
 volumes:
-  db-data:
-    name: twenty_prod_db_data
-  server-local-data:
-    name: twenty_prod_local_storage
+  twenty-db-data:
+    name: twenty-db-data
+  twenty-server-data:
+    name: twenty-server-data
+  twenty-redis-data:
+    name: twenty-redis-data
 
-# Dedicated internal bridge network to segregate CRM traffic
 networks:
-  twenty_network:
+  twenty-network:
+    name: twenty-network
     driver: bridge
