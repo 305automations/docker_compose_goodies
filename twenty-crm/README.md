@@ -214,31 +214,6 @@ No employees opening 42 browser tabs while silently reconsidering their career c
 
 ---
 
-# Screenshots
-
-## Dashboard
-
-[ADD SCREENSHOT]
-
----
-
-## Workflow Builder
-
-[ADD SCREENSHOT]
-
----
-
-## Lead Pipeline
-
-[ADD SCREENSHOT]
-
----
-
-## Automated Workflows
-
-[ADD SCREENSHOT]
-
----
 
 # Backup Recommendations
 
